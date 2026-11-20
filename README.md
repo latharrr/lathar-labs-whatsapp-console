@@ -32,7 +32,7 @@ messages with Meta's Cloud API.
 
 Python 3.12 + Flask, SQLite (WAL), Docker. nginx terminates TLS in front and
 proxies to the container on localhost. The UI is a single-page vanilla
-JS/CSS app in `static/` (Sora / Instrument Serif / JetBrains Mono, self-hosted
+JS/CSS app in `static/` (Hanken Grotesk + Newsreader, self-hosted
 WOFF2 with licenses in `static/fonts/`).
 
 ## Repo layout
