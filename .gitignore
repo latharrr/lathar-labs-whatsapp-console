@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+console.env
+data/
+*.db
+*.db-wal
+*.db-shm
+prev-*.png
+shot-*.png
