@@ -52,6 +52,29 @@ if digest_old in src:
 else:
     print("note: digest startup block not found, left unchanged")
 
+# Allowlist-block alerts: the console returns 403 for sends its allowlist blocks
+# (deliberate during containment). The relay's send-failure path would page the
+# owner about every one. Suppress owner alerts for 403 only; real Meta rejections
+# still alert.
+suppress_old = """            if not (is_owner_chat(chat_id) or is_owner_chat(orig_chat_id)):"""
+suppress_new = """            if e.code != 403 and not (is_owner_chat(chat_id) or is_owner_chat(orig_chat_id)):  # 403 = our allowlist, expected during containment"""
+if suppress_old in src:
+    src = src.replace(suppress_old, suppress_new, 1)
+else:
+    print("note: send perm-fail alert guard not found, left unchanged")
+
+# Dispatcher 08:00 IST digest edge (separate from the startup flush above):
+edge_old = """            if awake and not was_awake:
+                flush_owner_digest()
+                send_daily_digest()"""
+edge_new = """            if awake and not was_awake and os.environ.get("RELAY_DIGEST_ENABLED", "off").lower() == "on":
+                flush_owner_digest()
+                send_daily_digest()"""
+if edge_old in src:
+    src = src.replace(edge_old, edge_new)
+else:
+    print("note: dispatcher digest edge not found, left unchanged")
+
 # OTP redaction: code-shaped messages in an OTP window are stored as "[code hidden]"
 # instead of the raw digits. Applied only when RELAY_OTP_REDACT=on (owner decision;
 # changes what is stored in his relay.db history).

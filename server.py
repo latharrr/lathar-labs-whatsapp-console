@@ -98,6 +98,8 @@ def send_error(err):
     """Map a Graph failure to the HTTP contract the relay already handles."""
     if not isinstance(err, graph.GraphError):
         return 502, {"error": "transport error, not sent"}
+    # sanitized observability: numeric codes only, never bodies/tokens/recipients
+    log.warning("graph send failed: http=%s meta_code=%s", err.http_status, err.code)
     if err.http_status == 0:
         return 502, {"error": "could not reach Meta, not sent"}
     if err.code == 131026:
