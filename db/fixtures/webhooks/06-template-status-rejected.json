@@ -1,0 +1,1 @@
+{"object":"whatsapp_business_account","entry":[{"id":"100000000000001","time":1763600500,"changes":[{"field":"message_template_status_update","value":{"event":"REJECTED","message_template_id":900000000000001,"message_template_name":"fixture_order_update","message_template_language":"en","reason":"INVALID_FORMAT"}}]}]}

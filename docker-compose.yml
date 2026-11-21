@@ -1,0 +1,17 @@
+# Local only. Ports bound to 127.0.0.1 so nothing is exposed on the network.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ll
+      POSTGRES_PASSWORD: ll_local_only
+      POSTGRES_DB: ll_dashboard
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U ll"], interval: 2s, retries: 30 }
+  redis:
+    image: redis:7-alpine
+    ports: ["127.0.0.1:6379:6379"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 2s, retries: 30 }
+volumes:
+  pgdata:

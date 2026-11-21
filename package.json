@@ -1,0 +1,17 @@
+{
+  "name": "whatsapp-dashboard",
+  "private": true,
+  "workspaces": [
+    "db",
+    "web",
+    "worker"
+  ],
+  "scripts": {
+    "dev": "docker compose up -d --wait && npm run dev -w web",
+    "worker": "npm run dev -w worker",
+    "db:migrate": "npm run migrate -w db",
+    "db:seed": "npm run seed -w db",
+    "test": "npm test -w worker",
+    "e2e": "npm run e2e -w web"
+  }
+}

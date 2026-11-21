@@ -1,0 +1,578 @@
+// All changes after the init migration are additive: new tables, nullable columns, or backfilled columns.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  AGENT
+  VIEWER
+}
+
+enum Direction {
+  IN
+  OUT
+}
+
+model Organization {
+  id                 String            @id @default(cuid())
+  name               String
+  createdAt          DateTime          @default(now())
+  timezone           String            @default("Asia/Kolkata")
+  businessHours      Json? // { mon: [["09:00","18:00"]], ... } in timezone; null = always open
+  optOutKeywords     String[]          @default(["STOP", "UNSUBSCRIBE", "STOP PROMOTIONS", "NOT INTERESTED"])
+  optInKeywords      String[]          @default(["START"])
+  optOutReply        String? // sent once after an opt-out, inside the customer's open window; null = say nothing
+  messageRetentionDays Int? // null = keep
+  eventRetentionDays Int               @default(30)
+  memberships        Membership[]
+  wabas              Waba[]
+  contacts           Contact[]
+  alerts             Alert[]
+  auditLogs          AuditLog[]
+  invites            Invite[]
+  tags               Tag[]
+  segments           Segment[]
+  customFields       CustomField[]
+  quickReplies       QuickReply[]
+  campaigns          Campaign[]
+  automations        Automation[]
+  flows              Flow[]
+  apiKeys            ApiKey[]
+  outboundWebhooks   OutboundWebhook[]
+  outbound           OutboundMessage[]
+  apiEvents          ApiEvent[]
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  name         String?
+  passwordHash String? // null = Google-only account
+  createdAt    DateTime     @default(now())
+  memberships  Membership[]
+  assigned     Conversation[] @relation("assignee")
+  notes        Note[]
+}
+
+model Membership {
+  id     String       @id @default(cuid())
+  orgId  String
+  userId String
+  role   Role
+  org    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user   User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, userId])
+}
+
+model Waba {
+  id             String        @id @default(cuid())
+  orgId          String
+  metaWabaId     String        @unique
+  name           String?
+  accessTokenEnc String // AES-256-GCM, key in ENCRYPTION_KEY
+  tokenExpiresAt DateTime? // null = never expires (debug_token expires_at = 0) or unknown
+  tokenValid     Boolean?
+  tokenCheckedAt DateTime?
+  isFixture      Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+  org            Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  phoneNumbers   PhoneNumber[]
+  templates      Template[]
+}
+
+model PhoneNumber {
+  id                 String         @id @default(cuid())
+  wabaId             String
+  metaPhoneNumberId  String         @unique
+  displayPhoneNumber String
+  verifiedName       String?
+  status             String? // CONNECTED, ...
+  nameStatus         String?
+  qualityRating      String? // GREEN | YELLOW | RED | UNKNOWN
+  messagingLimit     String? // e.g. TIER_1K (portfolio-level since v24)
+  throughputLevel    String?
+  isFixture          Boolean        @default(false)
+  syncedAt           DateTime?
+  updatedAt          DateTime       @updatedAt
+  sendsPerSecond     Int            @default(20) // local cap under Meta's throughput (80/s standard)
+  waba               Waba           @relation(fields: [wabaId], references: [id], onDelete: Cascade)
+  conversations      Conversation[]
+  messages           Message[]
+  alerts             Alert[]
+  campaigns          Campaign[]
+  outbound           OutboundMessage[]
+}
+
+model Contact {
+  id            String              @id @default(cuid())
+  orgId         String
+  waId          String // E.164 digits, no +
+  profileName   String? // from WhatsApp
+  name          String? // set by the team
+  email         String?
+  optInStatus   String              @default("unknown") // unknown | opted_in | opted_out (marketing)
+  optInSource   String?
+  optInProof    String?
+  optInAt       DateTime?
+  optOutAt      DateTime?
+  optOutSource  String?
+  blocked       Boolean             @default(false)
+  blockedAt     DateTime?
+  isFixture     Boolean             @default(false)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @default(now()) @updatedAt
+  org           Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+  attributes    ContactAttribute[]
+  tags          ContactTag[]
+  recipients    CampaignRecipient[]
+  outbound      OutboundMessage[]
+
+  @@unique([orgId, waId])
+  @@index([orgId, optInStatus])
+}
+
+model ContactAttribute {
+  contactId String
+  key       String
+  value     String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, key])
+}
+
+model CustomField {
+  id    String       @id @default(cuid())
+  orgId String
+  key   String
+  label String
+  type  String       @default("text") // text | number | date | boolean
+  org   Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, key])
+}
+
+model Tag {
+  id       String       @id @default(cuid())
+  orgId    String
+  name     String
+  org      Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  contacts ContactTag[]
+
+  @@unique([orgId, name])
+}
+
+model ContactTag {
+  contactId String
+  tagId     String
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+}
+
+model Segment {
+  id        String       @id @default(cuid())
+  orgId     String
+  name      String
+  rules     Json // { match: "all" | "any", conditions: [{ field, op, value }] }
+  createdAt DateTime     @default(now())
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  campaigns Campaign[]
+
+  @@unique([orgId, name])
+}
+
+model Conversation {
+  id                 String      @id @default(cuid())
+  orgId              String
+  phoneNumberId      String
+  contactId          String
+  lastInboundAt      DateTime? // customer service window = lastInboundAt + 24h
+  lastMessageAt      DateTime?
+  lastMessagePreview String?
+  status             String      @default("open") // open | closed
+  assigneeId         String?
+  unread             Int         @default(0)
+  firstResponseAt    DateTime? // first agent reply after the conversation opened (analytics)
+  closedAt           DateTime?
+  lastAwayAt         DateTime? // away message sent at most once per 12h
+  createdAt          DateTime    @default(now())
+  phoneNumber        PhoneNumber @relation(fields: [phoneNumberId], references: [id], onDelete: Cascade)
+  contact            Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignee           User?       @relation("assignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  messages           Message[]
+  notes              Note[]
+  flowRuns           FlowRun[]
+
+  @@unique([phoneNumberId, contactId])
+  @@index([orgId, status, lastMessageAt])
+}
+
+model Note {
+  id             String       @id @default(cuid())
+  conversationId String
+  authorId       String?
+  body           String
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author         User?        @relation(fields: [authorId], references: [id], onDelete: SetNull)
+}
+
+model QuickReply {
+  id       String       @id @default(cuid())
+  orgId    String
+  shortcut String // typed as /shortcut in the composer
+  title    String
+  body     String
+  org      Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, shortcut])
+}
+
+model Message {
+  id              String        @id @default(cuid())
+  orgId           String
+  wamid           String        @unique // idempotency key from Meta
+  outboundId      String?       @unique
+  sentById        String?
+  isTest          Boolean       @default(false) // sent from a test account: never reached WhatsApp
+  mediaId         String? // Meta media id (inbound) or uploaded id (outbound)
+  mediaStatus     String? // pending | stored | failed | unavailable
+  mediaPath       String? // storage key
+  mediaMime       String?
+  mediaSize       Int?
+  mediaName       String?
+  errorTitle      String?
+  phoneNumberId   String
+  conversationId  String?
+  direction       Direction
+  type            String
+  body            String?
+  payload         Json?
+  status          String? // OUT only: sent < delivered < read; failed separately
+  errorCode       Int?
+  pricingCategory String? // marketing | utility | authentication | service | ...
+  billable        Boolean?
+  opensWindow     Boolean       @default(false) // IN only: started a new 24h window
+  timestamp       DateTime
+  createdAt       DateTime      @default(now())
+  phoneNumber     PhoneNumber   @relation(fields: [phoneNumberId], references: [id], onDelete: Cascade)
+  conversation    Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([phoneNumberId, direction, timestamp])
+  @@index([conversationId, timestamp])
+  @@index([orgId, timestamp])
+}
+
+/** Outbox: every send (inbox, campaign, automation, API) goes through here. idempotencyKey stops duplicates. */
+model OutboundMessage {
+  id             String       @id @default(cuid())
+  orgId          String
+  phoneNumberId  String
+  contactId      String
+  conversationId String?
+  kind           String // text | template | media | interactive | read
+  payload        Json // Graph "message" object without "to"/"messaging_product"
+  category       String // marketing | utility | authentication | service
+  idempotencyKey String       @unique
+  source         String // inbox | campaign | automation | api | optout
+  campaignId     String?
+  createdById    String?
+  status         String       @default("queued") // queued | sending | sent | failed | cancelled | blocked | unknown
+  attempts       Int          @default(0)
+  errorCode      Int?
+  errorMessage   String?
+  wamid          String?      @unique
+  notBefore      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  sentAt         DateTime?
+  org            Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  phoneNumber    PhoneNumber  @relation(fields: [phoneNumberId], references: [id], onDelete: Cascade)
+  contact        Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  recipient      CampaignRecipient?
+
+  @@index([orgId, status])
+  @@index([contactId, status])
+}
+
+model MessageStatus {
+  id              String   @id @default(cuid())
+  wamid           String
+  status          String
+  timestamp       DateTime
+  errorCode       Int?
+  errorTitle      String?
+  pricingCategory String?
+  pricingType     String?
+  billable        Boolean?
+  webhookEventId  String?
+  createdAt       DateTime @default(now())
+
+  @@unique([wamid, status])
+}
+
+model Template {
+  id             String            @id @default(cuid())
+  wabaId         String
+  metaTemplateId String? // null = local draft not yet submitted
+  name           String
+  language       String?
+  category       String?
+  status         String // APPROVED | PENDING | REJECTED | PAUSED | DISABLED | DRAFT | ...
+  reason         String?
+  quality        String? // GREEN | YELLOW | RED | UNKNOWN, from message_template_quality_update
+  components     Json?
+  version        Int               @default(1)
+  submittedAt    DateTime?
+  syncedAt       DateTime?
+  updatedAt      DateTime          @updatedAt
+  waba           Waba              @relation(fields: [wabaId], references: [id], onDelete: Cascade)
+  versions       TemplateVersion[]
+
+  @@unique([wabaId, metaTemplateId])
+}
+
+model TemplateVersion {
+  id          String   @id @default(cuid())
+  templateId  String
+  version     Int
+  category    String?
+  language    String?
+  components  Json
+  note        String? // saved draft | submitted | synced from Meta
+  createdById String?
+  createdAt   DateTime @default(now())
+  template    Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, version])
+}
+
+model Campaign {
+  id                String              @id @default(cuid())
+  orgId             String
+  phoneNumberId     String
+  segmentId         String?
+  name              String
+  status            String              @default("draft") // draft | scheduled | running | paused | completed | cancelled
+  variants          Json // [{ templateId, weight, variables: { "body.1": "field:name" | "text:..." } }]
+  throttlePerMinute Int                 @default(60)
+  scheduledAt       DateTime?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  utm               Json? // { source, medium, campaign }
+  createdById       String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  org               Organization        @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  phoneNumber       PhoneNumber         @relation(fields: [phoneNumberId], references: [id], onDelete: Cascade)
+  segment           Segment?            @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  recipients        CampaignRecipient[]
+  links             TrackedLink[]
+
+  @@index([orgId, status])
+}
+
+model CampaignRecipient {
+  id          String           @id @default(cuid())
+  campaignId  String
+  contactId   String
+  variant     Int              @default(0)
+  status      String           @default("pending") // pending | queued | sent | delivered | read | failed | skipped | cancelled
+  skipReason  String?
+  outboundId  String?          @unique
+  wamid       String?
+  errorCode   Int?
+  attempt     Int              @default(0)
+  repliedAt   DateTime?
+  clickedAt   DateTime?
+  convertedAt DateTime?
+  updatedAt   DateTime         @default(now()) @updatedAt
+  campaign    Campaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contact     Contact          @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  outbound    OutboundMessage? @relation(fields: [outboundId], references: [id], onDelete: SetNull)
+
+  @@unique([campaignId, contactId])
+  @@index([campaignId, status])
+  @@index([wamid])
+}
+
+model TrackedLink {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  orgId       String
+  campaignId  String?
+  recipientId String?
+  url         String
+  clicks      Int       @default(0)
+  lastClickAt DateTime?
+  createdAt   DateTime  @default(now())
+  campaign    Campaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model Automation {
+  id            String       @id @default(cuid())
+  orgId         String
+  name          String
+  kind          String // keyword | welcome | away | event
+  enabled       Boolean      @default(true)
+  phoneNumberId String? // null = every number
+  config        Json // keyword: { keywords, match }, event: { event, templateId, variables }, reply: { text }
+  flowId        String?
+  priority      Int          @default(100)
+  lastFiredAt   DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  org           Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  flow          Flow?        @relation(fields: [flowId], references: [id], onDelete: SetNull)
+}
+
+model Flow {
+  id          String       @id @default(cuid())
+  orgId       String
+  name        String
+  graph       Json // { start: nodeId, nodes: { [id]: { type, ...data } } }
+  updatedAt   DateTime     @updatedAt
+  createdAt   DateTime     @default(now())
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  automations Automation[]
+  runs        FlowRun[]
+}
+
+model FlowRun {
+  id             String       @id @default(cuid())
+  flowId         String
+  conversationId String
+  currentNode    String?
+  status         String       @default("running") // running | waiting | done | handoff | error
+  log            Json         @default("[]")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  flow           Flow         @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, status])
+}
+
+model ApiKey {
+  id          String       @id @default(cuid())
+  orgId       String
+  name        String
+  prefix      String // first characters, shown in the UI
+  hash        String       @unique // sha256 of the full key; the key itself is shown once
+  scopes      String[]
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdById String?
+  createdAt   DateTime     @default(now())
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+}
+
+model OutboundWebhook {
+  id         String            @id @default(cuid())
+  orgId      String
+  name       String
+  url        String
+  secretEnc  String // AES-GCM; used to sign deliveries (X-LL-Signature-256)
+  events     String[]
+  enabled    Boolean           @default(true)
+  createdAt  DateTime          @default(now())
+  org        Organization      @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+}
+
+model WebhookDelivery {
+  id           String          @id @default(cuid())
+  webhookId    String
+  event        String
+  payload      Json
+  status       String          @default("pending") // pending | ok | failed
+  attempts     Int             @default(0)
+  responseCode Int?
+  error        String?
+  createdAt    DateTime        @default(now())
+  deliveredAt  DateTime?
+  webhook      OutboundWebhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId, createdAt])
+}
+
+/** Events sent by external systems through the API (order placed, conversion, ...). */
+model ApiEvent {
+  id        String       @id @default(cuid())
+  orgId     String
+  contactId String?
+  name      String
+  data      Json
+  createdAt DateTime     @default(now())
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, name, createdAt])
+}
+
+model Invite {
+  id          String       @id @default(cuid())
+  orgId       String
+  email       String
+  role        Role
+  tokenHash   String       @unique
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdById String?
+  createdAt   DateTime     @default(now())
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+}
+
+model WebhookEvent {
+  id          String    @id @default(cuid())
+  orgId       String? // set from entry[].id when the WABA is known; null = unknown account (visible to no workspace)
+  field       String?
+  dedupeKey   String    @unique // sha256 of the raw body: Meta redelivers byte-identical payloads
+  rawBody     String
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+  attempts    Int       @default(0)
+  lastError   String?
+  note        String? // e.g. "unknown WABA", why an event was skipped
+
+  @@index([processedAt, receivedAt])
+  @@index([orgId, receivedAt])
+}
+
+model Alert {
+  id            String       @id @default(cuid())
+  orgId         String
+  phoneNumberId String?
+  dedupeKey     String       @unique
+  kind          String // quality | template | account | webhook | token
+  severity      String // info | warning | critical
+  title         String
+  detail        String?
+  createdAt     DateTime     @default(now())
+  resolvedAt    DateTime?
+  org           Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  phoneNumber   PhoneNumber? @relation(fields: [phoneNumberId], references: [id], onDelete: SetNull)
+}
+
+model AuditLog {
+  id        String        @id @default(cuid())
+  orgId     String?
+  userId    String?
+  action    String
+  target    String?
+  meta      Json?
+  ip        String?
+  createdAt DateTime      @default(now())
+  org       Organization? @relation(fields: [orgId], references: [id], onDelete: SetNull)
+
+  @@index([orgId, createdAt])
+}

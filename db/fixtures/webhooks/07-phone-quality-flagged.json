@@ -1,0 +1,1 @@
+{"object":"whatsapp_business_account","entry":[{"id":"100000000000001","time":1763600600,"changes":[{"field":"phone_number_quality_update","value":{"display_phone_number":"15550100100","event":"FLAGGED","current_limit":"TIER_1K"}}]}]}

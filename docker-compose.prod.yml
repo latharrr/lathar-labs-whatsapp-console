@@ -1,0 +1,54 @@
+# Production: web + worker + Postgres + Redis on one host.
+#   cp .env.example .env   # fill in the required values and POSTGRES_PASSWORD
+#   docker compose -f docker-compose.prod.yml up -d --build
+# Put a TLS reverse proxy (Caddy, nginx) in front of port 3100; Meta needs a public https URL.
+# With managed Postgres/Redis instead, remove those services and the DATABASE_URL/REDIS_URL overrides below.
+x-app: &app
+  build: .
+  image: whatsapp-dashboard
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql://ll:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/ll_dashboard
+    REDIS_URL: redis://redis:6379
+    MEDIA_DIR: /data/media
+  volumes: [media:/data/media]
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ll
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ll_dashboard
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U ll"], interval: 2s, retries: 30 }
+    restart: unless-stopped
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redisdata:/data]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 2s, retries: 30 }
+    restart: unless-stopped
+  migrate:
+    <<: *app
+    command: ["npm", "run", "deploy", "-w", "db"]
+    restart: "no"
+    depends_on: { postgres: { condition: service_healthy } }
+  web:
+    <<: *app
+    ports: ["3100:3100"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+  worker:
+    <<: *app
+    command: ["npm", "run", "start", "-w", "worker"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+volumes:
+  pgdata:
+  redisdata:
+  media:
